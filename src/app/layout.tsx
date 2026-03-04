@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "In-House | 사내 인사평가 시스템",
+  title: "likethix Garden | 사내 인사평가 시스템",
   description: "다면평가 360° + 정기 인사평가 시스템",
 };
 

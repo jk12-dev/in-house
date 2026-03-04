@@ -26,9 +26,9 @@ export default function LoginPage() {
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-lg">
-            IN
+            LG
           </div>
-          <CardTitle className="text-xl">In-House</CardTitle>
+          <CardTitle className="text-xl">likethix Garden</CardTitle>
           <CardDescription>
             사내 인사평가 시스템에 로그인하세요
           </CardDescription>
