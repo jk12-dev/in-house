@@ -1,6 +1,7 @@
 "use client";
 
 import { LogOut, User } from "lucide-react";
+import Link from "next/link";
 
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
@@ -15,7 +16,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
-export function AppHeader() {
+interface AppHeaderProps {
+  userName?: string;
+  userEmail?: string;
+}
+
+export function AppHeader({ userName = "사용자", userEmail = "" }: AppHeaderProps) {
+  const initials = userName.slice(0, 2);
+
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
       <SidebarTrigger className="-ml-1" />
@@ -27,7 +35,7 @@ export function AppHeader() {
           <Button variant="ghost" className="relative h-8 w-8 rounded-full">
             <Avatar className="h-8 w-8">
               <AvatarFallback className="bg-primary/10 text-primary text-xs">
-                JK
+                {initials}
               </AvatarFallback>
             </Avatar>
           </Button>
@@ -35,8 +43,8 @@ export function AppHeader() {
         <DropdownMenuContent className="w-56" align="end" forceMount>
           <DropdownMenuLabel className="font-normal">
             <div className="flex flex-col space-y-1">
-              <p className="text-sm font-medium">관리자</p>
-              <p className="text-xs text-muted-foreground">admin@company.com</p>
+              <p className="text-sm font-medium">{userName}</p>
+              <p className="text-xs text-muted-foreground">{userEmail}</p>
             </div>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
@@ -45,9 +53,11 @@ export function AppHeader() {
             <span>내 프로필</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem>
-            <LogOut className="mr-2 h-4 w-4" />
-            <span>로그아웃</span>
+          <DropdownMenuItem asChild>
+            <Link href="/api/auth/logout">
+              <LogOut className="mr-2 h-4 w-4" />
+              <span>로그아웃</span>
+            </Link>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
