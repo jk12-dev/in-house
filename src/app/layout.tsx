@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "likethix Garden | 사내 인사평가 시스템",
-  description: "다면평가 360° + 정기 인사평가 시스템",
+  description: "likethix 사내 서비스 플랫폼",
 };
 
 export default function RootLayout({
