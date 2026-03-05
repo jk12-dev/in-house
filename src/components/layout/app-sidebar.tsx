@@ -81,12 +81,11 @@ export function AppSidebar() {
 
   return (
     <Sidebar>
-      <SidebarHeader className="px-4 py-4">
-        <Link href="/dashboard" className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
-            LG
-          </div>
-          <span className="text-lg font-semibold">likethix Garden</span>
+      <SidebarHeader className="px-5 py-5">
+        <Link href="/dashboard" className="flex items-center gap-3">
+          <span className="text-lg tracking-tight text-white" style={{ fontFamily: "var(--font-heading)" }}>
+            likethix Garden
+          </span>
         </Link>
       </SidebarHeader>
 
@@ -153,8 +152,8 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="px-4 py-3">
-        <p className="text-xs text-muted-foreground">likethix Garden v0.1.0</p>
+      <SidebarFooter className="px-5 py-4">
+        <p className="text-xs text-white/40">likethix Garden v0.1.0</p>
       </SidebarFooter>
     </Sidebar>
   );
