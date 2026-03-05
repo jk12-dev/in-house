@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { supabaseAdmin } from "@/lib/supabase-admin";
 
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
@@ -48,13 +49,33 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 3. 세션 쿠키에 사용자 정보 저장
+    // 3. 로그인한 사용자를 Supabase에 upsert
+    const primaryOrg = userData.organizations?.find((o: { primary: boolean }) => o.primary) || userData.organizations?.[0];
+    const primaryOrgUnit = primaryOrg?.orgUnits?.find((u: { primary: boolean }) => u.primary) || primaryOrg?.orgUnits?.[0];
+    const userName = (userData.userName?.lastName || "") + (userData.userName?.firstName || "");
+
+    await supabaseAdmin
+      .from("users")
+      .upsert(
+        {
+          naver_works_id: userData.userId,
+          email: userData.email || "",
+          name: userName,
+          department: primaryOrgUnit?.orgUnitName || null,
+          department_id: primaryOrgUnit?.orgUnitId || null,
+          position: primaryOrg?.levelName || null,
+          avatar_url: userData.photoUrl || null,
+        },
+        { onConflict: "naver_works_id" }
+      );
+
+    // 4. 세션 쿠키에 사용자 정보 저장
     const session = {
       userId: userData.userId,
-      name: userData.userName?.lastName + userData.userName?.firstName || "",
+      name: userName,
       email: userData.email || "",
-      department: userData.organizations?.[0]?.orgUnitName || "",
-      position: userData.organizations?.[0]?.levelName || "",
+      department: primaryOrgUnit?.orgUnitName || "",
+      position: primaryOrg?.levelName || "",
       accessToken: tokenData.access_token,
       refreshToken: tokenData.refresh_token,
     };
