@@ -87,7 +87,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "접근 권한이 없습니다" }, { status: 403 });
   }
 
-  const cycle = assignment.cycle as { status: string } | null;
+  const cycleData = assignment.cycle as unknown as { status: string }[] | { status: string } | null;
+  const cycle = Array.isArray(cycleData) ? cycleData[0] : cycleData;
   if (cycle?.status !== "active") {
     return NextResponse.json({ error: "평가 기간이 아닙니다" }, { status: 400 });
   }
