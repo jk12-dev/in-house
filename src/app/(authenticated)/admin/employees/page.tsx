@@ -1,17 +1,32 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { RefreshCw, Users, Search, ChevronDown, ChevronRight } from "lucide-react";
+import { RefreshCw, Users, Search, ChevronDown, ChevronRight, GripVertical } from "lucide-react";
 
 interface UserRow {
   id: string;
@@ -27,21 +42,117 @@ interface UserRow {
   updated_at: string;
 }
 
+interface PendingChange {
+  role?: string;
+  is_active?: boolean;
+}
+
 type ViewMode = "list" | "department";
 type SortKey = "name" | "employee_number" | "department" | "position" | "role";
 type SortDir = "asc" | "desc";
+
+const POSITION_ORDER: Record<string, number> = {
+  "대표": 1,
+  "C-Level": 2,
+  "이사": 3,
+  "수석": 4,
+  "부장": 5,
+  "차장": 6,
+  "과장": 7,
+  "대리": 8,
+  "사원": 9,
+  "인턴": 10,
+};
+
+const roleOptions = [
+  { value: "admin", label: "관리자" },
+  { value: "manager", label: "매니저" },
+  { value: "employee", label: "직원" },
+];
+
+const statusOptions = [
+  { value: "active", label: "재직" },
+  { value: "inactive", label: "퇴사" },
+];
+
+function SortableDeptCard({
+  id,
+  deptLabel,
+  memberCount,
+  collapsed,
+  onToggle,
+  children,
+}: {
+  id: string;
+  deptLabel: string;
+  memberCount: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  children?: React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+      className={`rounded-lg border bg-background transition-shadow ${isDragging ? "shadow-lg opacity-70 z-10" : ""}`}
+    >
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b bg-muted/30 rounded-t-lg">
+        <div
+          {...attributes}
+          {...listeners}
+          className="cursor-grab active:cursor-grabbing p-0.5 -ml-1 rounded hover:bg-muted"
+        >
+          <GripVertical className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <button
+          onClick={onToggle}
+          className="flex items-center gap-2 flex-1 text-left"
+        >
+          {collapsed ? (
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+          <span className="font-medium text-sm">{deptLabel}</span>
+          <span className="text-xs text-muted-foreground ml-1">{memberCount}명</span>
+        </button>
+      </div>
+      {!collapsed && <div className="px-1">{children}</div>}
+    </div>
+  );
+}
 
 export default function EmployeesPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
-  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortKey, setSortKey] = useState<SortKey>("position");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
+  const [pendingChanges, setPendingChanges] = useState<Record<string, PendingChange>>({});
+  const [deptOrder, setDeptOrder] = useState<string[]>([]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const changeCount = Object.keys(pendingChanges).length;
+
+  const changeViewMode = (mode: ViewMode) => {
+    setViewMode(mode);
+    localStorage.setItem("employees-view", mode);
+  };
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -70,6 +181,7 @@ export default function EmployeesPage() {
           `동기화 완료: 부서 ${data.synced.departments}개, 구성원 ${data.synced.members}명${deactivatedMsg}`
         );
         fetchUsers();
+        setPendingChanges({});
       } else {
         setSyncResult(`동기화 실패: ${data.error}`);
       }
@@ -82,51 +194,102 @@ export default function EmployeesPage() {
 
   useEffect(() => {
     fetchUsers();
+    const savedView = localStorage.getItem("employees-view") as ViewMode;
+    if (savedView) setViewMode(savedView);
+    const savedOrder = localStorage.getItem("dept-order");
+    if (savedOrder) setDeptOrder(JSON.parse(savedOrder));
   }, []);
 
-  const roleOptions = [
-    { value: "admin", label: "관리자" },
-    { value: "manager", label: "매니저" },
-    { value: "employee", label: "직원" },
-  ];
+  // 로컬 변경 (아직 서버 반영 안 됨)
+  const setLocalChange = useCallback((userId: string, field: "role" | "is_active", value: string | boolean) => {
+    const user = users.find((u) => u.id === userId);
+    if (!user) return;
 
-  const handleToggleActive = async (userId: string, userName: string, currentActive: boolean) => {
-    const action = currentActive ? "퇴사 처리" : "재직 복원";
-    if (!confirm(`${userName}님을 ${action}하시겠습니까?`)) return;
+    setPendingChanges((prev) => {
+      const existing = prev[userId] || {};
+      const updated = { ...existing, [field]: value };
 
+      // 원래 값과 같으면 해당 필드 삭제
+      const originalValue = field === "is_active" ? user.is_active : user.role;
+      if (updated[field] === originalValue) {
+        delete updated[field];
+      }
+
+      // 변경 사항이 없으면 해당 유저 엔트리 삭제
+      if (Object.keys(updated).length === 0) {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      }
+
+      return { ...prev, [userId]: updated };
+    });
+  }, [users]);
+
+  const handleDiscardChanges = () => {
+    setPendingChanges({});
+  };
+
+  const handleSaveChanges = async () => {
+    setSaving(true);
     try {
-      const res = await fetch(`/api/members/${userId}/active`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ is_active: !currentActive }),
-      });
-      if (res.ok) {
+      const entries = Object.entries(pendingChanges);
+      const results = await Promise.all(
+        entries.map(async ([userId, changes]) => {
+          const promises: Promise<Response>[] = [];
+          if (changes.role !== undefined) {
+            promises.push(
+              fetch(`/api/members/${userId}/role`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ role: changes.role }),
+              })
+            );
+          }
+          if (changes.is_active !== undefined) {
+            promises.push(
+              fetch(`/api/members/${userId}/active`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ is_active: changes.is_active }),
+              })
+            );
+          }
+          return Promise.all(promises);
+        })
+      );
+
+      // 성공 시 로컬 상태 반영
+      const allOk = results.every((resList) => resList.every((r) => r.ok));
+      if (allOk) {
         setUsers((prev) =>
-          prev.map((u) => (u.id === userId ? { ...u, is_active: !currentActive } : u))
+          prev.map((u) => {
+            const changes = pendingChanges[u.id];
+            if (!changes) return u;
+            return {
+              ...u,
+              ...(changes.role !== undefined && { role: changes.role }),
+              ...(changes.is_active !== undefined && { is_active: changes.is_active }),
+            };
+          })
         );
-        if (currentActive) setShowInactive(true);
+        setPendingChanges({});
       }
     } catch {
-      console.error("상태 변경 실패");
+      console.error("저장 실패");
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleRoleChange = async (userId: string, newRole: string) => {
-    try {
-      const res = await fetch(`/api/members/${userId}/role`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role: newRole }),
-      });
-      if (res.ok) {
-        setUsers((prev) =>
-          prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u))
-        );
-      }
-    } catch {
-      console.error("역할 변경 실패");
-    }
+  // 현재 표시할 값 (pending 포함)
+  const getDisplayValue = (user: UserRow, field: "role" | "is_active") => {
+    const changes = pendingChanges[user.id];
+    if (changes && changes[field] !== undefined) return changes[field];
+    return user[field];
   };
+
+  const isChanged = (userId: string) => !!pendingChanges[userId];
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -165,9 +328,19 @@ export default function EmployeesPage() {
     }
 
     result.sort((a, b) => {
-      const valA = (a[sortKey] || "").toLowerCase();
-      const valB = (b[sortKey] || "").toLowerCase();
-      const cmp = valA.localeCompare(valB, "ko");
+      let cmp: number;
+      if (sortKey === "position") {
+        const posA = POSITION_ORDER[a.position || ""] ?? 99;
+        const posB = POSITION_ORDER[b.position || ""] ?? 99;
+        cmp = posA - posB;
+        if (cmp === 0) {
+          cmp = (a.employee_number || "").localeCompare(b.employee_number || "");
+        }
+      } else {
+        const valA = (a[sortKey] || "").toLowerCase();
+        const valB = (b[sortKey] || "").toLowerCase();
+        cmp = valA.localeCompare(valB, "ko");
+      }
       return sortDir === "asc" ? cmp : -cmp;
     });
 
@@ -181,76 +354,101 @@ export default function EmployeesPage() {
       if (!groups[dept]) groups[dept] = [];
       groups[dept].push(user);
     }
-    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b, "ko"));
+    return Object.entries(groups).sort(([, aMembers], [, bMembers]) => {
+      const minA = Math.min(...aMembers.map(u => parseInt(u.employee_number || "999999")));
+      const minB = Math.min(...bMembers.map(u => parseInt(u.employee_number || "999999")));
+      return minA - minB;
+    });
   }, [processedUsers]);
 
+  const orderedDepts = useMemo(() => {
+    if (deptOrder.length === 0) return groupedByDept;
+    const orderMap = new Map(deptOrder.map((d, i) => [d, i]));
+    return [...groupedByDept].sort(([a], [b]) => {
+      const oA = orderMap.get(a) ?? 999;
+      const oB = orderMap.get(b) ?? 999;
+      if (oA !== oB) return oA - oB;
+      return a.localeCompare(b, "ko");
+    });
+  }, [groupedByDept, deptOrder]);
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      const ids = orderedDepts.map(([d]) => d);
+      const oldIndex = ids.indexOf(active.id as string);
+      const newIndex = ids.indexOf(over.id as string);
+      const newOrder = arrayMove(ids, oldIndex, newIndex);
+      setDeptOrder(newOrder);
+      localStorage.setItem("dept-order", JSON.stringify(newOrder));
+    }
+  };
+
   const SortHeader = ({ label, field }: { label: string; field: SortKey }) => (
-    <th
-      className="pb-3 pr-4 font-medium cursor-pointer select-none hover:text-foreground"
+    <span
+      className="inline-flex items-center gap-1 cursor-pointer select-none hover:text-foreground"
       onClick={() => handleSort(field)}
     >
-      <span className="inline-flex items-center gap-1">
-        {label}
-        {sortKey === field && (
-          <span className="text-xs">{sortDir === "asc" ? "↑" : "↓"}</span>
-        )}
+      {label}
+      <span className="text-xs" style={{ color: sortKey === field ? "#212121" : "#DADADA" }}>
+        {sortKey === field ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
       </span>
-    </th>
+    </span>
   );
 
-  const UserRow = ({ user }: { user: UserRow }) => (
-    <tr className={`border-b last:border-0 ${!user.is_active ? "opacity-50" : ""}`}>
-      <td className="py-3 pr-4 text-muted-foreground tabular-nums">{user.employee_number || "—"}</td>
-      <td className="py-3 pr-4">
-        <div className="flex items-center gap-3">
-          <Avatar className="h-8 w-8">
-            {user.avatar_url && <AvatarImage src={user.avatar_url} />}
-            <AvatarFallback className="text-xs">
-              {user.name.slice(0, 2)}
-            </AvatarFallback>
-          </Avatar>
-          <span className="font-medium">{user.name}</span>
-        </div>
-      </td>
-      <td className="py-3 pr-4 text-muted-foreground">{user.email}</td>
-      {viewMode === "list" && (
-        <td className="py-3 pr-4">{user.department || "—"}</td>
-      )}
-      <td className="py-3 pr-4">{user.position || "—"}</td>
-      <td className="py-3 pr-4">
-        <select
-          value={user.role}
-          onChange={(e) => handleRoleChange(user.id, e.target.value)}
-          className="rounded-md border bg-background px-2 py-1 text-xs"
-        >
-          {roleOptions.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-      </td>
-      <td className="py-3">
-        <div className="flex items-center">
-          <button
-            onClick={() => handleToggleActive(user.id, user.name, user.is_active)}
-            className="group relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2"
-            style={{ backgroundColor: user.is_active ? "#34C759" : "#E5E5EA" }}
-            role="switch"
-            aria-checked={user.is_active}
+  const UserRowComponent = ({ user }: { user: UserRow }) => {
+    const displayRole = getDisplayValue(user, "role") as string;
+    const displayActive = getDisplayValue(user, "is_active") as boolean;
+    const changed = isChanged(user.id);
+
+    return (
+      <tr className={`border-b last:border-0 transition-colors ${changed ? "bg-[#2332D9]/5" : ""} ${!displayActive ? "opacity-50" : ""}`}>
+        <td className="py-3 pr-6 text-muted-foreground tabular-nums whitespace-nowrap">{user.employee_number || "—"}</td>
+        <td className="py-3 pr-6 font-medium whitespace-nowrap">{user.name}</td>
+        {viewMode === "list" && (
+          <td className="py-3 pr-6 text-muted-foreground whitespace-nowrap">{user.department || "—"}</td>
+        )}
+        <td className="py-3 pr-6 whitespace-nowrap">{user.position || "—"}</td>
+        <td className="py-3 pr-6 whitespace-nowrap">
+          <select
+            value={displayRole}
+            onChange={(e) => setLocalChange(user.id, "role", e.target.value)}
+            className={`rounded-md border bg-background px-2 py-1 text-xs ${
+              pendingChanges[user.id]?.role !== undefined ? "border-[#2332D9] text-[#2332D9]" : ""
+            }`}
           >
+            {roleOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </td>
+        <td className="py-3 pr-6 whitespace-nowrap">
+          <div className="flex items-center gap-2">
             <span
-              className="pointer-events-none inline-block h-[22px] w-[22px] rounded-full bg-white shadow-sm ring-0 transition-transform duration-200 ease-in-out"
-              style={{ transform: user.is_active ? "translateX(22px)" : "translateX(2px)" }}
+              className="inline-block h-2 w-2 rounded-full shrink-0"
+              style={{ backgroundColor: displayActive ? "#34C759" : "#FF3B30" }}
             />
-          </button>
-          <span className={`ml-2 text-xs ${user.is_active ? "text-green-600" : "text-muted-foreground"}`}>
-            {user.is_active ? "재직" : "퇴사"}
-          </span>
-        </div>
-      </td>
-    </tr>
-  );
+            <select
+              value={displayActive ? "active" : "inactive"}
+              onChange={(e) => setLocalChange(user.id, "is_active", e.target.value === "active")}
+              className={`rounded-md border bg-background px-2 py-1 text-xs ${
+                pendingChanges[user.id]?.is_active !== undefined
+                  ? "border-[#2332D9] text-[#2332D9]"
+                  : ""
+              }`}
+            >
+              {statusOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+        </td>
+        <td className="py-3 text-muted-foreground truncate">{user.email}</td>
+      </tr>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -261,7 +459,7 @@ export default function EmployeesPage() {
             네이버 웍스에서 구성원 정보를 동기화하고 관리합니다.
           </p>
         </div>
-        <Button onClick={handleSync} disabled={syncing}>
+        <Button onClick={handleSync} disabled={syncing} variant="outline">
           <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
           {syncing ? "동기화 중..." : "웍스에서 동기화"}
         </Button>
@@ -270,6 +468,27 @@ export default function EmployeesPage() {
       {syncResult && (
         <div className="rounded-lg border bg-muted/50 px-4 py-3 text-sm">
           {syncResult}
+        </div>
+      )}
+
+      {/* 변경사항 저장 바 (하단 고정) */}
+      {changeCount > 0 && (
+        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 flex items-center gap-4 rounded-full border bg-[#212121] px-6 py-3 shadow-lg">
+          <span className="text-sm font-medium text-white">
+            {changeCount}건 변경됨
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleDiscardChanges}
+              disabled={saving}
+              className="rounded-full px-3 py-1 text-sm text-white/60 hover:text-white transition-colors"
+            >
+              취소
+            </button>
+            <Button size="sm" onClick={handleSaveChanges} disabled={saving}>
+              {saving ? "저장 중..." : "저장"}
+            </Button>
+          </div>
         </div>
       )}
 
@@ -283,7 +502,7 @@ export default function EmployeesPage() {
             <div className="flex items-center gap-2">
               <div className="inline-flex rounded-lg border p-0.5 text-xs">
                 <button
-                  onClick={() => setViewMode("list")}
+                  onClick={() => changeViewMode("list")}
                   className={`rounded-md px-3 py-1 transition-colors ${
                     viewMode === "list" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
                   }`}
@@ -291,7 +510,7 @@ export default function EmployeesPage() {
                   목록
                 </button>
                 <button
-                  onClick={() => setViewMode("department")}
+                  onClick={() => changeViewMode("department")}
                   className={`rounded-md px-3 py-1 transition-colors ${
                     viewMode === "department" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
                   }`}
@@ -344,55 +563,70 @@ export default function EmployeesPage() {
             </div>
           ) : viewMode === "list" ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
+                <colgroup>
+                  <col style={{ width: "9%" }} />
+                  <col style={{ width: "8%" }} />
+                  <col style={{ width: "18%" }} />
+                  <col style={{ width: "8%" }} />
+                  <col style={{ width: "10%" }} />
+                  <col style={{ width: "11%" }} />
+                  <col />
+                </colgroup>
                 <thead>
-                  <tr className="border-b text-left">
-                    <SortHeader label="사번" field="employee_number" />
-                    <SortHeader label="이름" field="name" />
-                    <th className="pb-3 pr-4 font-medium">이메일</th>
-                    <SortHeader label="부서" field="department" />
-                    <SortHeader label="직급" field="position" />
-                    <SortHeader label="역할" field="role" />
-                    <th className="pb-3 font-medium">상태</th>
+                  <tr className="border-b text-left text-muted-foreground">
+                    <th className="pb-3 pr-6 font-medium"><SortHeader label="사번" field="employee_number" /></th>
+                    <th className="pb-3 pr-6 font-medium"><SortHeader label="이름" field="name" /></th>
+                    <th className="pb-3 pr-6 font-medium"><SortHeader label="부서" field="department" /></th>
+                    <th className="pb-3 pr-6 font-medium"><SortHeader label="직급" field="position" /></th>
+                    <th className="pb-3 pr-6 font-medium"><SortHeader label="역할" field="role" /></th>
+                    <th className="pb-3 pr-6 font-medium">상태</th>
+                    <th className="pb-3 font-medium">이메일</th>
                   </tr>
                 </thead>
                 <tbody>
                   {processedUsers.map((user) => (
-                    <UserRow key={user.id} user={user} />
+                    <UserRowComponent key={user.id} user={user} />
                   ))}
                 </tbody>
               </table>
             </div>
           ) : (
-            <div className="space-y-2">
-              {groupedByDept.map(([dept, members]) => (
-                <div key={dept} className="rounded-lg border">
-                  <button
-                    onClick={() => toggleDeptCollapse(dept)}
-                    className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-muted/50 transition-colors"
-                  >
-                    {collapsedDepts.has(dept) ? (
-                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                    ) : (
-                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                    )}
-                    <span className="font-medium text-sm">{dept}</span>
-                    <span className="text-xs text-muted-foreground">{members.length}명</span>
-                  </button>
-                  {!collapsedDepts.has(dept) && (
-                    <div className="border-t px-4">
-                      <table className="w-full text-sm">
-                        <tbody>
-                          {members.map((user) => (
-                            <UserRow key={user.id} user={user} />
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={orderedDepts.map(([d]) => d)} strategy={verticalListSortingStrategy}>
+                <div className="space-y-3">
+                  {orderedDepts.map(([dept, members]) => {
+                    const deptLabel = dept.replace(/\s*\(.*?\)\s*/g, "");
+                    return (
+                      <SortableDeptCard
+                        key={dept}
+                        id={dept}
+                        deptLabel={deptLabel}
+                        memberCount={members.length}
+                        collapsed={collapsedDepts.has(dept)}
+                        onToggle={() => toggleDeptCollapse(dept)}
+                      >
+                        <table className="w-full text-sm table-fixed">
+                          <colgroup>
+                            <col style={{ width: "10%" }} />
+                            <col style={{ width: "10%" }} />
+                            <col style={{ width: "10%" }} />
+                            <col style={{ width: "12%" }} />
+                            <col style={{ width: "13%" }} />
+                            <col />
+                          </colgroup>
+                          <tbody>
+                            {members.map((user) => (
+                              <UserRowComponent key={user.id} user={user} />
+                            ))}
+                          </tbody>
+                        </table>
+                      </SortableDeptCard>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
+              </SortableContext>
+            </DndContext>
           )}
         </CardContent>
       </Card>

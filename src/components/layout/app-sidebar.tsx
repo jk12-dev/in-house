@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   Users,
   ClipboardCheck,
+  ClipboardList,
   Settings,
   Star,
   FileText,
@@ -32,6 +33,11 @@ const mainMenu = [
     title: "대시보드",
     href: "/dashboard",
     icon: LayoutDashboard,
+  },
+  {
+    title: "나의 평가",
+    href: "/my-evaluations",
+    icon: ClipboardList,
   },
 ];
 
@@ -97,7 +103,7 @@ export function AppSidebar() {
             <SidebarMenu>
               {mainMenu.map((item) => (
                 <SidebarMenuItem key={item.href}>
-                  <SidebarMenuButton asChild isActive={pathname === item.href}>
+                  <SidebarMenuButton asChild isActive={pathname === item.href || pathname.startsWith(item.href + "/")}>
                     <Link href={item.href}>
                       <item.icon className="size-4" />
                       <span>{item.title}</span>
